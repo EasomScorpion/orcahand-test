@@ -233,10 +233,10 @@ class CurlSolver:
                 extra_raw = float(_np.dot(v, local_x))
 
         # 沿用之前的 natural_sign 配置（不动，按用户要求）
-        # sim 4 指 abd 旋转方向不一致：
-        #   index_abd / middle_abd: range 单边偏负，extra_raw > 0（朝 +X 拇指侧）→ abd_lo
-        #   ring_abd   / pinky_abd: range 单边偏正，extra_raw > 0              → abd_hi
-        natural_signs = {"index": -1.0, "middle": -1.0, "ring": +1.0, "pinky": +1.0}
+        # sim 4 指 abd 旋转方向：
+        #   index_abd / middle_abd / ring_abd: extra_raw > 0（朝 thumb 方向 = 朝 +X sim 系）→ abd_lo
+        #   pinky_abd: extra_raw > 0 → abd_hi（方向与前三指相反）
+        natural_signs = {"index": -1.0, "middle": -1.0, "ring": -1.0, "pinky": +1.0}
         ns = natural_signs[finger_name]
         extra = extra_raw * ns
 
