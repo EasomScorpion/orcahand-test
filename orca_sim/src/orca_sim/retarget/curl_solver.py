@@ -38,10 +38,9 @@ PINKY_MCP, PINKY_PIP, PINKY_DIP, PINKY_TIP = 17, 18, 19, 20
 class CurlSolverConfig:
     """CurlSolver 配置。"""
 
-    # 非拇指：mcp_angle = mcp_mid + curl_eff × mcp_gain × (mcp_hi - mcp_mid)
-    # 张直(curl_eff=0) → mcp_mid（sim 手自然位置，对应人手指垂直）
-    # 握拳(curl_eff=1) → mcp_hi（手指全弯）
-    # mcp_gain ≈ 1 时握拳到 hi
+    # 非拇指：mcp_angle = mcp_lo + curl_eff × (mcp_hi - mcp_lo)
+    # 张直(curl_eff=0) → mcp_lo（人手伸直）；握拳(curl_eff=1) → mcp_hi
+    # mcp_gain=1.0 时刚好用满 ctrlrange；不要再放大
     mcp_gain: float = 1.0
 
     # pip 跟 mcp 联动比例
@@ -49,13 +48,14 @@ class CurlSolverConfig:
     pip_ratio: float = 0.7
 
     # 拇指：thumb_pip_gain 决定 thumb_pip 最大值
-    # 提高以让拇指弯曲幅度更大（人手张开时拇指其实伸直，握拳时拇指大幅弯到掌心）
-    thumb_pip_gain: float = 2.4         # 1.88 → 2.4
-    thumb_mcp_ratio: float = 0.7        # 0.5 → 0.7 (thumb_mcp 跟 thumb_pip 联动更强)
-    thumb_dip_ratio: float = 0.7        # 0.5 → 0.7 (thumb_dip 也加强)
+    # thumb_pip ctrlrange 上限 = +1.23 → gain=1.23 时 curl_eff=1 刚好到 hi
+    # 不要再放大，否则 curl=0.5 就 saturate 到 hi，丢失中段区分度
+    thumb_pip_gain: float = 1.23
+    thumb_mcp_ratio: float = 0.85       # thumb_mcp 联动更强
+    thumb_dip_ratio: float = 0.65
 
     # thumb_abd：thumb_tip.y 映射
-    thumb_abd_y_scale: float = 0.05     # 0.08 → 0.05 (更敏感：小幅度 tip.y 变化就产生 abd)
+    thumb_abd_y_scale: float = 0.04     # 0.08 → 0.04 (更灵敏)
 
     # 非拇指 abd：TIP 相对当前手指 MCP 的横向偏移（不是相对 middle_mcp）
     #   extra = (tip.x - mcp.x) / 单手指"自然张开方向"
@@ -154,17 +154,14 @@ class CurlSolver:
 
         d = float(np.linalg.norm(lm_tip - lm_mcp))
         curl_norm = float(np.clip(1.0 - d / finger_length, 0.0, 1.0))
-        # 人手张直时 curl_norm 自然 ≈ 0.06（关节有自然曲度）
-        # 用幂曲线让低 curl_norm 区域快速落到 mcp_lo
-        # pow 0.25: curl_norm=0.06 → eff=0.495（太多）
-        # 用 piecewise: curl_norm < 0.10 直接 mcp_lo
-        if curl_norm < 0.10:
-            # 张直 → 完全伸直
+        # 不再用 piecewise 阈值：保留真实 curl_norm（小差异直接反映到 mcp 微调）
+        # 这样 ring 与 middle 即使 curl=0.05 与 0.07 也会有差异
+        if curl_norm < 0.05:
             curl_eff = 0.0
         else:
-            # 缩放到 [0, 1] 区间（0.10 → 0, 1.0 → 1）
-            scaled = (curl_norm - 0.10) / 0.90
-            curl_eff = float(np.sqrt(scaled))  # sqrt 加速
+            # 缩放到 [0, 1] 区间；保留小 curl 让 mcp 有细微差异
+            scaled = (curl_norm - 0.05) / 0.95
+            curl_eff = float(np.sqrt(max(scaled, 0.0)))  # sqrt 加速
 
         mcp_lo, mcp_hi = self._ctrlrange[mcp_aidx]
         # 伸直(curl_eff=0) → mcp_lo；握拳(curl_eff=1) → mcp_hi
@@ -303,7 +300,12 @@ class CurlSolver:
             landmarks_world[THUMB_TIP],
             thumb_len,
         )
-        thumb_pip_angle = thumb_curl_norm * self.config.thumb_pip_gain
+        # 与 4 指一致：阈值降 + sqrt 加速，让小幅度 thumb 弯曲也能区分
+        if thumb_curl_norm < 0.05:
+            thumb_curl_eff = 0.0
+        else:
+            thumb_curl_eff = float(np.sqrt(max((thumb_curl_norm - 0.05) / 0.95, 0.0)))
+        thumb_pip_angle = thumb_curl_eff * self.config.thumb_pip_gain
         thumb_mcp_angle = thumb_pip_angle * self.config.thumb_mcp_ratio
         thumb_dip_angle = thumb_pip_angle * self.config.thumb_dip_ratio
 
