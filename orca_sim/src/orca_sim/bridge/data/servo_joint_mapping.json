@@ -1,0 +1,25 @@
+{
+  "_comment": "FTServo_Python 真机端 17 舵机 ↔ 中文关节名 ↔ orca_sim v1 右手 actuator 的权威映射。提供方：用户 / 项目；版本：v1（右手无皮肤）。",
+  "version": "v1",
+  "hand": "right",
+  "skin": false,
+  "servo_id_to_actuator": {
+    "1":  {"chinese": "食指指尖",   "sim_actuator": "right_index_pip",  "joint_role": "pip"},
+    "2":  {"chinese": "食指指中",   "sim_actuator": "right_index_mcp",  "joint_role": "mcp"},
+    "3":  {"chinese": "食指指根",   "sim_actuator": "right_index_abd",  "joint_role": "abd"},
+    "4":  {"chinese": "中指指根",   "sim_actuator": "right_middle_abd", "joint_role": "abd"},
+    "5":  {"chinese": "小拇指指根", "sim_actuator": "right_pinky_abd",  "joint_role": "abd"},
+    "6":  {"chinese": "小拇指指尖", "sim_actuator": "right_pinky_pip",  "joint_role": "pip"},
+    "7":  {"chinese": "小拇指指中", "sim_actuator": "right_pinky_mcp",  "joint_role": "mcp"},
+    "8":  {"chinese": "中指指尖",   "sim_actuator": "right_middle_pip", "joint_role": "pip"},
+    "9":  {"chinese": "中指指中",   "sim_actuator": "right_middle_mcp", "joint_role": "mcp"},
+    "10": {"chinese": "无名指指中", "sim_actuator": "right_ring_mcp",   "joint_role": "mcp"},
+    "11": {"chinese": "无名指指尖", "sim_actuator": "right_ring_pip",   "joint_role": "pip"},
+    "12": {"chinese": "无名指指根", "sim_actuator": "right_ring_abd",   "joint_role": "abd"},
+    "13": {"chinese": "大拇指大指根","sim_actuator": "right_thumb_abd",  "joint_role": "abd"},
+    "14": {"chinese": "大拇指小指根","sim_actuator": "right_thumb_mcp",  "joint_role": "mcp"},
+    "15": {"chinese": "大拇指指尖", "sim_actuator": "right_thumb_dip",  "joint_role": "pip"},
+    "16": {"chinese": "大拇指指中", "sim_actuator": "right_thumb_pip",  "joint_role": "pip"},
+    "17": {"chinese": "腕关节",     "sim_actuator": "right_wrist",      "joint_role": "wrist"}
+  }
+}

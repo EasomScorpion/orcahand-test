@@ -1,0 +1,56 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "orca_sim"
+version = "0.1.0"
+description = "ORCA hand simulation environment using Gymnasium and Mujoco."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+  {name = "Francesco Capuano", email = "capuano@robots.ox.ac.uk"},
+]
+dependencies = [
+  "gymnasium>=0.29",
+  "mujoco>=3.1",
+  "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+]
+bridge = [
+  "pyserial>=3.4",   # FTServo_Python/test/servo_console.py 所需；dry_run 模式不需要
+]
+teleop = [
+  "mediapipe>=0.10,<0.10.20",  # 手势识别（21 个 3D 关键点）；必须 <0.10.20，老 API 已被 1.0 移除
+  "opencv-python>=4.8,<5",      # 摄像头读取
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+orca_sim = [
+  "*.xml",
+  "scenes/*/*.xml",
+  "assets/mjcf/*.xml",
+  "assets/mjcf/*/*.xml",
+  "assets/mjcf/left/visual/*.stl",
+  "assets/mjcf/left/collision/*.stl",
+  "assets/mjcf/right/visual/*.stl",
+  "assets/mjcf/right/collision/*.stl",
+  "models/mjcf/*.mjcf",
+  "models/*/*.mjcf",
+  "models/*/assets/mjcf/*/*.stl",
+]
