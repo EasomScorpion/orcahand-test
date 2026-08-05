@@ -167,8 +167,11 @@ class MediaPipeHandTracker:
             lms_world[i, 0] = lm.x
             lms_world[i, 1] = lm.y
             lms_world[i, 2] = lm.z
+        # 注意：main loop 里已经 cv2.flip(frame, 1) 做了图像镜像 → MediaPipe
+        # 看到的是反过来的图像 → 它的 world_landmarks.x 已经是「人左手视角」的 X
+        # 再翻一次 X 会让 4 指 X 方向全反，让外展/并指方向反
+        # → 关掉 mirror_x（X 不再翻，Z 仍要翻因为 MediaPipe Z 与 sim Z 反向）
         if self.mirror_x:
-            lms_world[:, 0] *= -1.0
             lms_world[:, 2] *= -1.0
 
         # 21 个关键点像素坐标 → 换算回原图

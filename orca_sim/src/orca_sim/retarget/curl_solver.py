@@ -66,6 +66,16 @@ class CurlSolverConfig:
     # abd_x_scale = 0.04（额外外展 40mm → 达到 abd_lo）
     abd_x_scale: float = 0.04
 
+    # 每指的自然 sign（运行时可改 — 用于调试验证 abd 方向）
+    # 用户实测后调整 ring 从 -1.0 → ?
+    natural_signs: dict[str, float] = None  # type: ignore
+
+    def __post_init__(self):
+        if self.natural_signs is None:
+            self.natural_signs = {
+                "index": -1.0, "middle": -1.0, "ring": -1.0, "pinky": +1.0,
+            }
+
     # 输出限位
     enforce_limits: bool = True
 
@@ -233,10 +243,13 @@ class CurlSolver:
                 extra_raw = float(_np.dot(v, local_x))
 
         # 沿用之前的 natural_sign 配置（不动，按用户要求）
-        # sim 4 指 abd 旋转方向：
-        #   index_abd / middle_abd / ring_abd: extra_raw > 0（朝 thumb 方向 = 朝 +X sim 系）→ abd_lo
-        #   pinky_abd: extra_raw > 0 → abd_hi（方向与前三指相反）
-        natural_signs = {"index": -1.0, "middle": -1.0, "ring": -1.0, "pinky": +1.0}
+        # 真实人手坐标系：thumb 在 sim +X（人右手边），index 在 sim +X（右手边），
+        # pinky 在 sim -X（左手边）。人手"外展 = 远离中指"：
+        #   - index/middle/ring: 外展应该让 tip 朝 sim +X 移动（远离中指 = 远离其他手指）
+        #     → 用 natural_sign=-1 让 extra_raw > 0 → abd_lo → sim tip 朝 +X
+        #   - pinky 外展应该让 tip 朝 sim -X 移动 → 需要不同的 sign
+        # 配置在 CurlSolverConfig.natural_signs（运行时可改）
+        natural_signs = self.config.natural_signs
         ns = natural_signs[finger_name]
         extra = extra_raw * ns
 
