@@ -47,7 +47,6 @@ orca_sim/wandb/
 
 # FTServo 串口日志
 *.csv
-!FTServo_Python/参数/*.xdat
 
 # Claude / agent 临时文件
 .claude/
