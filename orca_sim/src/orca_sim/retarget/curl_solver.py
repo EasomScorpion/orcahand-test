@@ -49,12 +49,13 @@ class CurlSolverConfig:
     pip_ratio: float = 0.7
 
     # 拇指：thumb_pip_gain 决定 thumb_pip 最大值
-    thumb_pip_gain: float = 1.88
-    thumb_mcp_ratio: float = 0.5
-    thumb_dip_ratio: float = 0.5
+    # 提高以让拇指弯曲幅度更大（人手张开时拇指其实伸直，握拳时拇指大幅弯到掌心）
+    thumb_pip_gain: float = 2.4         # 1.88 → 2.4
+    thumb_mcp_ratio: float = 0.7        # 0.5 → 0.7 (thumb_mcp 跟 thumb_pip 联动更强)
+    thumb_dip_ratio: float = 0.7        # 0.5 → 0.7 (thumb_dip 也加强)
 
     # thumb_abd：thumb_tip.y 映射
-    thumb_abd_y_scale: float = 0.08
+    thumb_abd_y_scale: float = 0.05     # 0.08 → 0.05 (更敏感：小幅度 tip.y 变化就产生 abd)
 
     # 非拇指 abd：TIP 相对当前手指 MCP 的横向偏移（不是相对 middle_mcp）
     #   extra = (tip.x - mcp.x) / 单手指"自然张开方向"
@@ -235,14 +236,20 @@ class CurlSolver:
                 extra_raw = float(_np.dot(v, local_x))
 
         # 沿用之前的 natural_sign 配置（不动，按用户要求）
-        natural_signs = {"index": -1.0, "middle": -1.0, "ring": -1.0, "pinky": -1.0}
+        # sim 4 指 abd 旋转方向不一致：
+        #   index_abd / middle_abd: range 单边偏负，extra_raw > 0（朝 +X 拇指侧）→ abd_lo
+        #   ring_abd   / pinky_abd: range 单边偏正，extra_raw > 0              → abd_hi
+        natural_signs = {"index": -1.0, "middle": -1.0, "ring": +1.0, "pinky": +1.0}
         ns = natural_signs[finger_name]
         extra = extra_raw * ns
 
         abd_aidx = {"index": 5, "middle": 8, "ring": 11, "pinky": 14}[finger_name]
         abd_lo, abd_hi = self._ctrlrange[abd_aidx]
 
-        norm_v = float(_np.clip(extra / self.config.abd_x_scale, -1, 1))
+        # 缩小 scale 让小幅横向偏移就能产生明显 abd 变化（人手外展 5mm 就该有反应）
+        # 之前 0.04 太宽——人手外展 1cm 只产生 25% 范围
+        abd_scale = self.config.abd_x_scale * 0.6   # 0.04 → 0.024
+        norm_v = float(_np.clip(extra / abd_scale, -1, 1))
         abd_value = abd_lo + 0.5 * (norm_v + 1) * (abd_hi - abd_lo)
         return float(_np.clip(abd_value, abd_lo, abd_hi))
 
