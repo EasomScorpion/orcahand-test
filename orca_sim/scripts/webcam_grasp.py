@@ -276,8 +276,13 @@ def _main_loop_with_webcam(
             if pose.detected:
                 lm_now = pose.landmarks_world
                 wrist = lm_now[0]
+                # 各指尖相对手腕的 X 偏移（人手外展时这个值应该有明显变化）
+                xs = [float(lm_now[i, 0] - lm_now[0, 0]) for i in (4, 8, 12, 16, 20)]
                 dists = [float(np.linalg.norm(lm_now[i] - wrist)) for i in (4, 8, 12, 16, 20)]
-                extra = f"  tip_dists(mm)={[f'{d*1000:.0f}' for d in dists]}"
+                extra = (
+                    f"  X(mm)={[f'{x*1000:+5.0f}' for x in xs]}"
+                    f"  dists(mm)={[f'{d*1000:.0f}' for d in dists]}"
+                )
             print(f"[main] FPS={fps_smoothed:4.1f}  {status}  conf={pose.confidence:.2f}{extra}", flush=True)
             last_log_t = now
 
