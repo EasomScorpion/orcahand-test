@@ -10,7 +10,7 @@ env.reset(seed=42)
 m = env.unwrapped.model
 d = env.unwrapped.data
 
-solver = CurlSolver(m, d, CurlSolverConfig(lookup_samples=30))
+solver = CurlSolver(m, d, CurlSolverConfig())
 t0 = time.time()
 # 模拟张开手
 landmarks = np.zeros((21, 3), dtype=np.float64)
@@ -25,7 +25,7 @@ landmarks[2] = [-0.04, 0.02, 0.04]  # THUMB_MCP
 
 # 第一次会触发 lookup 构建
 qpos_open = solver.solve(landmarks)
-print(f"lookup build + solve 张开: {time.time()-t0:.2f}s")
+print(f"build + solve 张开: {time.time()-t0:.2f}s")
 print(f"qpos 张开: {np.round(qpos_open, 3)}")
 
 # 握拳：所有 TIP 靠近 MCP

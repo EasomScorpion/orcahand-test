@@ -1,9 +1,9 @@
-"""webcam_grasp.py —— 端到端：摄像头手势 → MediaPipe → IK → sim 17 关节角 → MuJoCo viewer。
+"""webcam_grasp.py —— 端到端：摄像头手势 → MediaPipe → BoneMatcher → sim 17 关节角 → MuJoCo viewer。
 
 最小可用版本（MVP），零真机依赖。要做的事：
     1. 打开默认摄像头
     2. 用 MediaPipe Hands 检测手部 21 个 3D 关键点
-    3. 取 5 个指尖相对手腕的偏移 → IK → sim 17 关节角
+    3. 通过 BoneMatcher（启发式初值 + 可选 IK 微调）算出 sim 17 关节角
     4. 在 OrcaHandRight env 里 step，并用 MuJoCo viewer 渲染
 
 使用方法：
@@ -11,11 +11,13 @@
     source orca/Scripts/activate
     python scripts/webcam_grasp.py --render human
     python scripts/webcam_grasp.py --no-webcam --recorded-tips recorded.npy  # 没摄像头时
+    python scripts/webcam_grasp.py --use-curl                            # 用旧 CurlSolver（对比/兜底）
 
 按键：
     q / ESC  → 退出
     r        → reset sim
     c        → toggle 显示摄像头小窗口
+    m        → toggle BoneMatcher 启发式 vs 启发式+IK
 """
 
 from __future__ import annotations
@@ -50,8 +52,8 @@ def _parse_args() -> argparse.Namespace:
                    help="送进 MediaPipe 的帧宽（默认 256；越小越快，建议 192-320）")
     p.add_argument("--no-render", action="store_true",
                    help="不开 MuJoCo viewer（提速测 FPS 用）")
-    p.add_argument("--use-ik", action="store_true",
-                   help="退回用旧的 HandIKSolver 而非 CurlSolver（用于对比）")
+    p.add_argument("--use-curl", action="store_true",
+                   help="退回用旧的 CurlSolver 而非 BoneMatcher（用于对比）")
     p.add_argument("--oe-min-cutoff", type=float, default=0.004,
                    help="OneEuroFilter min_cutoff（默认 0.004；越小越平滑）")
     p.add_argument("--oe-beta", type=float, default=0.7,
@@ -61,15 +63,20 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--wrist-offset", type=float, nargs=3, default=[0.0, 0.0, 0.30],
                    metavar=("X", "Y", "Z"),
                    help="手腕相对 sim base 的初始偏移（默认 +0.30m 抬高，避免穿地）")
+    p.add_argument("--no-ik", action="store_true",
+                   help="BoneMatcher 不跑 LM IK 微调（只用启发式初值，更快但精度差）")
+    p.add_argument("--frame-skip", type=int, default=20,
+                   help="每帧 sim 子步数（默认 20，比默认 5 收敛更快）")
     return p.parse_args()
 
 
 def _main_loop_with_webcam(
     env, solver, render_mode: str, show_camera: bool, hand_scale: float,
-    mp_width: int = 256, use_ik: bool = False,
+    mp_width: int = 256, use_curl: bool = False,
     one_euro_min_cutoff: float = 0.004, one_euro_beta: float = 0.7,
+    use_ik: bool = True,
 ) -> None:
-    """摄像头 + 实时 IK 主循环。"""
+    """摄像头 + BoneMatcher / 旧 IK 主循环。"""
     import cv2
     from orca_sim.retarget import MediaPipeHandTracker, OneEuroFilterND
 
@@ -77,12 +84,17 @@ def _main_loop_with_webcam(
     if not cap.isOpened():
         raise RuntimeError("无法打开摄像头 0，请检查是否被占用或加 --camera-index 1")
 
-    tracker = MediaPipeHandTracker(model_complexity=0, process_width=mp_width)
+    tracker = MediaPipeHandTracker(
+        model_complexity=0,
+        process_width=mp_width,
+        min_detection_confidence=0.3,    # 宽松点，避免人手一动就丢失
+    )
 
-    print("[main] 按 'q' 退出，'r' reset sim，'c' 切换摄像头窗口")
+    print("[main] 按 'q' 退出，'r' reset sim，'c' 切换摄像头窗口，'m' toggle IK")
     print("[main] 请把右手伸到镜头前，张开/握拳试一下。")
 
     wrist_world = np.array(env.unwrapped.data.xpos[env.unwrapped.model.body("right_palm").id, :3])
+    m_qpos0 = env.unwrapped.model.qpos0[:17].copy()   # 用于检测丢失后回零
 
     # MediaPipe Hands 21 关键点的骨架连接（标准手部骨架）
     HAND_CONNECTIONS = (
@@ -93,9 +105,7 @@ def _main_loop_with_webcam(
         (13, 17), (17, 18), (18, 19), (19, 20),  # pinky
         (0, 17),                                 # palm
     )
-    # 5 指尖在 21 个关键点中的索引
     FIVE_TIPS = (4, 8, 12, 16, 20)
-    # 5 指尖对应的 OpenCV 颜色（BGR）：thumb=粉, index=蓝, middle=绿, ring=黄, pinky=紫
     TIP_COLORS_BGR = (
         (203, 192, 255),  # thumb: pink
         (255, 128, 0),    # index: blue
@@ -111,32 +121,87 @@ def _main_loop_with_webcam(
     one_euro = OneEuroFilterND(
         dims=63, min_cutoff=one_euro_min_cutoff, beta=one_euro_beta,
     )
+    prev_qpos = None
+    missed_frames = 0
+    last_log_t = 0.0
     while True:
         ok, frame = cap.read()
         if not ok:
             print("[main] 摄像头读不到帧，退出")
             break
 
+        now = time.time()
         frame = cv2.flip(frame, 1)  # 镜像，符合用户习惯
         pose = tracker.process(frame)
 
         if pose.detected:
-            # 1€ filter 平滑 21 landmarks（关键抗抖动步骤）
+            # 1€ filter 平滑（传 t=now 让 cutoff 自适应真实帧率）
             lms_flat = pose.landmarks_world.flatten()
-            lms_smooth_flat = one_euro(lms_flat)
+            lms_smooth_flat = one_euro(lms_flat, t=now)
             landmarks_smooth = lms_smooth_flat.reshape(21, 3)
             # 求解
-            qpos = solver.solve(landmarks_smooth) if not use_ik else None
-            env.step(qpos.astype(np.float32))
+            if not use_curl:
+                qpos = solver.solve(
+                    landmarks_smooth,
+                    prev_qpos=prev_qpos,
+                    data=env.unwrapped.data,
+                )
+            else:
+                qpos = solver.solve(landmarks_smooth)
+            # 直接写 ctrl 并连续 step 多次 → servo 跟得上人手变化
+            qpos_f32 = qpos.astype(np.float32)
+            env.unwrapped.data.ctrl[:17] = np.clip(
+                qpos_f32,
+                env.unwrapped.action_low,
+                env.unwrapped.action_high,
+            )
+            # 跑 N 个 mj_step 让 servo 真的收敛（否则 frame_skip=5 视觉上基本不动）
+            import mujoco as _mj
+            for _ in range(8):
+                _mj.mj_step(env.unwrapped.model, env.unwrapped.data, nstep=env.unwrapped.frame_skip)
+            _mj.mj_forward(env.unwrapped.model, env.unwrapped.data)
+            if env.unwrapped.render_mode == "human":
+                env.unwrapped.render()
+            prev_qpos = qpos.copy()
+            missed_frames = 0
+            # 调试：每 30 帧打印一次 qpos vs sim 当前 qpos
+            if now - last_log_t > 1.0:
+                actual_qpos = env.unwrapped.data.qpos[:17].copy()
+                diff = float(np.max(np.abs(actual_qpos - qpos)))
+                print(f"[main]   qpos[:3]={qpos[:3].round(2)}, sim_qpos[:3]={actual_qpos[:3].round(2)}, max_diff={diff:.3f}", flush=True)
+        else:
+            # MediaPipe 没检测到手——保持上一次的 qpos（不让 sim 卡死）
+            missed_frames += 1
+            if prev_qpos is not None:
+                env.unwrapped.data.ctrl[:17] = np.clip(
+                    prev_qpos.astype(np.float32),
+                    env.unwrapped.action_low,
+                    env.unwrapped.action_high,
+                )
+                import mujoco as _mj
+                for _ in range(4):
+                    _mj.mj_step(env.unwrapped.model, env.unwrapped.data, nstep=env.unwrapped.frame_skip)
+                _mj.mj_forward(env.unwrapped.model, env.unwrapped.data)
+                if env.unwrapped.render_mode == "human":
+                    env.unwrapped.render()
+            # 超过 30 帧 (~1s) 没检测到 → 直接 rest（人手离开镜头了）
+            if missed_frames > 30 and prev_qpos is not None:
+                env.unwrapped.data.ctrl[:17] = np.clip(
+                    m_qpos0.astype(np.float32),
+                    env.unwrapped.action_low,
+                    env.unwrapped.action_high,
+                )
+                import mujoco as _mj
+                for _ in range(8):
+                    _mj.mj_step(env.unwrapped.model, env.unwrapped.data, nstep=env.unwrapped.frame_skip)
+                prev_qpos = None
+                missed_frames = 0
         if show_camera and pose.image_landmarks is not None:
             lms = pose.image_landmarks
-            # 画骨架连线（白色）
             for a, b in HAND_CONNECTIONS:
                 cv2.line(frame, tuple(lms[a]), tuple(lms[b]), (255, 255, 255), 2, cv2.LINE_AA)
-            # 画所有 21 个关键点（绿色小点）
             for i in range(21):
                 cv2.circle(frame, tuple(lms[i]), 3, (0, 255, 0), -1, cv2.LINE_AA)
-            # 高亮 5 指尖（大圆 + 文字标签）
             for tip_idx, color, name in zip(FIVE_TIPS, TIP_COLORS_BGR, TIP_NAMES):
                 pt = tuple(lms[tip_idx])
                 cv2.circle(frame, pt, 8, color, -1, cv2.LINE_AA)
@@ -145,7 +210,6 @@ def _main_loop_with_webcam(
                     frame, name, (pt[0] + 12, pt[1] - 8),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA,
                 )
-            # 左上角 HUD
             cv2.putText(
                 frame,
                 f"hand: YES  conf={pose.confidence:.2f}",
@@ -156,7 +220,6 @@ def _main_loop_with_webcam(
                 2,
                 cv2.LINE_AA,
             )
-            # 显示指尖相对手腕的偏移（米）
             for i, (name, color) in enumerate(zip(TIP_NAMES, TIP_COLORS_BGR)):
                 tip_idx = FIVE_TIPS[i]
                 lm_tip = pose.landmarks_world[tip_idx]
@@ -184,7 +247,6 @@ def _main_loop_with_webcam(
                 cv2.LINE_AA,
             )
 
-        # 右上角 FPS（平滑后）
         if show_camera:
             cv2.putText(
                 frame,
@@ -197,20 +259,28 @@ def _main_loop_with_webcam(
                 cv2.LINE_AA,
             )
 
-        # 显示摄像头窗口
         if show_camera:
             cv2.imshow("webcam + hand tracking", frame)
 
-        # 30 fps 节流
         elapsed = time.time() - last_frame_time
         if elapsed < 1 / 30:
             time.sleep(1 / 30 - elapsed)
-        # 平滑 FPS 显示（EMA，alpha=0.1）
         instant_fps = 1.0 / max(elapsed, 1e-6)
         fps_smoothed = 0.9 * fps_smoothed + 0.1 * instant_fps if fps_smoothed > 0 else instant_fps
         last_frame_time = time.time()
 
-        # 按键
+        # 每秒打印一次检测状态（便于排查 MediaPipe 检测丢失）
+        if now - last_log_t > 1.0:
+            status = "DETECTED" if pose.detected else f"NO_HAND (missed={missed_frames})"
+            extra = ""
+            if pose.detected:
+                lm_now = pose.landmarks_world
+                wrist = lm_now[0]
+                dists = [float(np.linalg.norm(lm_now[i] - wrist)) for i in (4, 8, 12, 16, 20)]
+                extra = f"  tip_dists(mm)={[f'{d*1000:.0f}' for d in dists]}"
+            print(f"[main] FPS={fps_smoothed:4.1f}  {status}  conf={pose.confidence:.2f}{extra}", flush=True)
+            last_log_t = now
+
         key = cv2.waitKey(1) & 0xFF
         if key in (ord("q"), 27):
             break
@@ -221,6 +291,36 @@ def _main_loop_with_webcam(
             show_camera = not show_camera
             if not show_camera:
                 cv2.destroyWindow("webcam + hand tracking")
+        if key == ord("m"):
+            use_ik = not use_ik
+            print(f"[main] IK 微调: {'on' if use_ik else 'off'}")
+
+        # 调试用：按数字键 0-6 强制触发 calibration 各手势 qpos（不走摄像头）
+        if key in (ord("0"), ord("1"), ord("2"), ord("3"), ord("4"),
+                   ord("5"), ord("6")):
+            import json as _json
+            cal = _json.load(open("calibration_data.json", encoding="utf-8"))
+            poses = ["open_hand", "fist", "peace", "index_point",
+                     "pinky_point", "thumbs_up", "spread"]
+            idx = int(chr(key))
+            if idx < len(poses):
+                lm = np.array(cal["poses"][poses[idx]]["landmarks"])
+                if not use_curl:
+                    qpos = solver.solve(lm, data=env.unwrapped.data)
+                else:
+                    qpos = solver.solve(lm)
+                env.unwrapped.data.ctrl[:17] = np.clip(
+                    qpos.astype(np.float32),
+                    env.unwrapped.action_low,
+                    env.unwrapped.action_high,
+                )
+                import mujoco as _mj
+                for _ in range(16):
+                    _mj.mj_step(env.unwrapped.model, env.unwrapped.data, nstep=env.unwrapped.frame_skip)
+                _mj.mj_forward(env.unwrapped.model, env.unwrapped.data)
+                if env.unwrapped.render_mode == "human":
+                    env.unwrapped.render()
+                print(f"[main] *** 强制 {poses[idx]} qpos[:3]={qpos[:3].round(2)} ***", flush=True)
 
     tracker.close()
     cap.release()
@@ -247,6 +347,7 @@ def main() -> int:
     from orca_sim.retarget import (
         HandIKSolver, IKSolverConfig,
         CurlSolver, CurlSolverConfig,
+        SimSkeleton, BoneMatcher, BoneMatcherConfig,
     )
 
     render_mode = args.render if args.render != "none" else "rgb_array"
@@ -258,21 +359,29 @@ def main() -> int:
     )
     obs, info = env.reset()
 
-    # 求解器
-    if args.use_ik:
-        solver = HandIKSolver(
-            env.unwrapped.model, env.unwrapped.data,
-            IKSolverConfig(max_iterations=8),
-        )
-        print("[main] 使用 HandIKSolver（IK 方案）")
-    else:
+    # 加大 frame_skip → sim servo 收敛更快（默认 5 收敛太慢）
+    env.unwrapped.frame_skip = args.frame_skip
+    print(f"[main] sim frame_skip = {env.unwrapped.frame_skip}")
+
+    # 求解器：默认 BoneMatcher；--use-curl 用旧 CurlSolver
+    if args.use_curl:
         solver = CurlSolver(
             env.unwrapped.model, env.unwrapped.data,
             CurlSolverConfig(),
         )
-        print("[main] 使用 CurlSolver（curl-based，无 IK）")
+        print("[main] 使用 CurlSolver（旧 curl-based 方案）")
+    else:
+        skel = SimSkeleton.from_model(env.unwrapped.model)
+        cfg = BoneMatcherConfig(
+            max_iterations=12,
+            lm_damping=1e-3,
+            warm_start=True,
+            use_heuristic_init=True,
+            enforce_limits=True,
+        )
+        solver = BoneMatcher(skel, env.unwrapped.model, env.unwrapped.data, cfg)
+        print("[main] 使用 BoneMatcher（启发式 = CurlSolver + LM IK 微调）")
 
-    # 把手腕位置抬高到 +Z 方向，避免 IK 解在地里
     palm_id = env.unwrapped.model.body("right_palm").id
     wrist_world = env.unwrapped.data.xpos[palm_id, :3].copy() + np.array(args.wrist_offset)
 
@@ -289,10 +398,11 @@ def main() -> int:
             _main_loop_recorded(env, ik, tips_seq, render_mode)
         else:
             _main_loop_with_webcam(
-        env, solver, render_mode, not args.no_show_camera, args.hand_scale,
-        mp_width=args.mp_width, use_ik=args.use_ik,
-        one_euro_min_cutoff=args.oe_min_cutoff, one_euro_beta=args.oe_beta,
-    )
+                env, solver, render_mode, not args.no_show_camera, args.hand_scale,
+                mp_width=args.mp_width, use_curl=args.use_curl,
+                one_euro_min_cutoff=args.oe_min_cutoff, one_euro_beta=args.oe_beta,
+                use_ik=not args.no_ik,
+            )
     finally:
         env.close()
 

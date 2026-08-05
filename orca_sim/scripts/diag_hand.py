@@ -17,6 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from orca_sim.retarget import MediaPipeHandTracker
 
 
+# 5 指尖在 21 关键点中的索引
+FIVE_TIPS = (4, 8, 12, 16, 20)
+FINGER_NAMES = ("thumb", "index", "middle", "ring", "pinky")
+
+
 def main():
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
@@ -45,12 +50,14 @@ def main():
         pose = tracker.process(frame)
         if pose.detected:
             detected += 1
-            all_tips.append(pose.fingertip_targets_wrist_frame.copy())
-            t = pose.fingertip_targets_wrist_frame
+            # 用 5 指尖相对手腕的偏移（旧 API 是 fingertips_targets_wrist_frame）
+            tips_rel = pose.landmarks_world[list(FIVE_TIPS)] - pose.landmarks_world[0]
+            all_tips.append(tips_rel.copy())
+            t = tips_rel[1]   # index tip
             print(
                 f"  frame {i:2d}  conf={pose.confidence:.2f}  "
-                f"thumb=({t[0,0]:+.3f},{t[0,1]:+.3f},{t[0,2]:+.3f})  "
-                f"index=({t[1,0]:+.3f},{t[1,1]:+.3f},{t[1,2]:+.3f})",
+                f"thumb=({tips_rel[0,0]*1000:+5.1f},{tips_rel[0,1]*1000:+5.1f},{tips_rel[0,2]*1000:+5.1f})mm  "
+                f"index=({tips_rel[1,0]*1000:+5.1f},{tips_rel[1,1]*1000:+5.1f},{tips_rel[1,2]*1000:+5.1f})mm",
                 flush=True,
             )
         else:
@@ -64,9 +71,9 @@ def main():
         tips_arr = np.stack(all_tips, axis=0)  # (T, 5, 3)
         # 帧间抖动：相邻帧指尖位置差
         jitter = np.linalg.norm(np.diff(tips_arr, axis=0), axis=2)  # (T-1, 5)
-        print(f"帧间平均抖动: {jitter.mean()*100:.2f} cm")
-        print(f"帧间最大抖动: {jitter.max()*100:.2f} cm")
-        print("(如果抖动 > 1cm，需要加指数平滑)")
+        print(f"帧间平均抖动: {jitter.mean()*1000:.2f} mm")
+        print(f"帧间最大抖动: {jitter.max()*1000:.2f} mm")
+        print("(如果抖动 > 10mm，需要加指数平滑)")
     print("=" * 60)
 
     cap.release()
