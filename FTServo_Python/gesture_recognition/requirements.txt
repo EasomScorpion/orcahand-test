@@ -1,0 +1,3 @@
+opencv-python>=4.8
+mediapipe>=0.10,<1.0   # 0.10.x 用的是 solutions API; 1.x 改用 Tasks API
+numpy>=1.24

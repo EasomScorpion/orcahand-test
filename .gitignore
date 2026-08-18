@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+
+# 虚拟环境
+orca_sim/orca/
+orca_sim/.venv/
+orca_core/.venv/
+.env/
+
+# MuJoCo 编译 / 构建产物
+orca_sim/build/
+orca_sim/dist/
+orca_core/build/
+orca_core/install/
+orca_core/log/
+
+# 测试 / 运行产物
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
+.tox/
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# 仿真临时文件 / 输出
+*.mp4
+*.tmp
+*.bak
+
+# orca_sim 仿真数据
+orca_sim/runs/
+orca_sim/checkpoints/
+orca_sim/wandb/
+
+# FTServo 串口日志
+*.csv
+
+# Claude / agent 临时文件
+.claude/
+
+# 备份的子仓库历史（展开后保留以防回滚）
+.git_backup/
